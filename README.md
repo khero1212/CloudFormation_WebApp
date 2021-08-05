@@ -1,6 +1,6 @@
-![][header]
-
-[header]: https://github.com/khero1212/CloudFormation_WebApp/blob/master/header.jpg "Header"
+<p align="center">
+  <img src="https://github.com/khero1212/CloudFormation_WebApp/blob/master/header.jpg" alt="header" />
+</p>
 
 <br>
 
