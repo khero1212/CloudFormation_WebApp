@@ -1,0 +1,171 @@
+Description: >
+  Karthik Thatipalli / Udagram Project
+  This template deploys EC2 instances, load balancers, security groups and
+  IAM permissions.
+
+Parameters:
+  EnvTag:
+    Description: The name of our environment
+    Type: String
+
+Resources:
+  S3ReadRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvTag}-S3Role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+
+  S3ReadPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: S3ReadPolicy
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:Get*
+              - s3:List*
+            Resource: "*"
+      Roles:
+        - Ref: S3ReadRole
+
+  S3InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: "/"
+      Roles:
+        - Ref: S3ReadRole
+
+  LoadBalancerSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Load Balancer security group
+      VpcId:
+        Fn::ImportValue: !Sub ${EnvTag}-VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+  WebServerSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Web Server security group
+      VpcId:
+        Fn::ImportValue: !Sub ${EnvTag}-VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+
+  WebAppLaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          apt-get update -y
+          apt-get install apache2 -y
+          systemctl start apache2.service
+          cd /var/www/html
+          echo "Udacity Demo Web Server Up and Running!" > index.html
+      ImageId: ami-0747bdcabd34c712a
+      IamInstanceProfile: !Ref S3InstanceProfile
+      SecurityGroups:
+        - Ref: WebServerSG
+      InstanceType: t2.medium
+      BlockDeviceMappings:
+        - DeviceName: "/dev/sdk"
+          Ebs:
+            VolumeSize: "10"
+
+  WebAppGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - Fn::ImportValue: !Sub ${EnvTag}-PRIV-NETS
+      LaunchConfigurationName:
+        Ref: WebAppLaunchConfiguration
+      MinSize: "4"
+      MaxSize: "8"
+      TargetGroupARNs:
+        - Ref: WebAppTargetGroup
+
+  WebAppLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      SecurityGroups:
+        - Ref: LoadBalancerSG
+      Subnets:
+        - Fn::ImportValue: !Sub ${EnvTag}-PUBSubnet1
+        - Fn::ImportValue: !Sub ${EnvTag}-PUBSubnet2
+
+  LoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn:
+            Ref: WebAppTargetGroup
+      LoadBalancerArn:
+        Ref: WebAppLoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  ALBListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref WebAppTargetGroup
+      Conditions:
+        - Field: path-pattern
+          Values: [/]
+      ListenerArn: !Ref LoadBalancerListener
+      Priority: 1
+
+  WebAppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 10
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 8
+      HealthyThresholdCount: 2
+      Port: 80
+      Protocol: HTTP
+      UnhealthyThresholdCount: 5
+      VpcId:
+        Fn::ImportValue: !Sub ${EnvTag}-VpcId
+
+Outputs:
+  WebAppLBdns:
+    Description: DNS name or Public URL of the Load Balancer
+    Value: !Join ["", ["http://", !GetAtt WebAppLoadBalancer.DNSName]]
+    Export:
+      Name: !Sub ${EnvTag}-LB-DNS
